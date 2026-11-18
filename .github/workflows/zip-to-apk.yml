@@ -1,35 +1,45 @@
 name: Zip to APK
-on:
-  push:
-    paths: ['**.zip']
-  workflow_dispatch:
 
-permissions:
-  contents: write
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+concurrency:
+  group: zip-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: En yeni zip'i bul ve ac
+      - name: En guncel zip'i bul ve ac
         run: |
-          ZIP=$(git -c core.quotepath=false log --diff-filter=AM --name-only --pretty=format: -- '*.zip' | grep -m1 '\.zip$')
-          echo "Zip: $ZIP"
-          [ -n "$ZIP" ] || { echo "Zip bulunamadi"; exit 1; }
+          set -euo pipefail
+          ZIP=$(git -c core.quotepath=false log --diff-filter=AM --name-only --pretty=format: -- '*.zip' | grep -m1 '\.zip$' || true)
           rm -rf work && mkdir work
-          unzip -q "$ZIP" -d work
-          S=$(find work -name settings.gradle.kts -o -name settings.gradle | head -1)
+          if [ -n "$ZIP" ] && [ -f "$ZIP" ]; then
+            echo "Kullanilan zip: $ZIP"
+            unzip -q "$ZIP" -d work
+          else
+            echo "Zip yok, repo kokundeki proje kullaniliyor"
+            rsync -a --exclude work --exclude .git ./ work/
+          fi
+          S=$(find work -name 'settings.gradle*' | head -1)
           [ -n "$S" ] || { echo "Gradle projesi bulunamadi"; exit 1; }
-          echo "PROJ=$(dirname "$S")" >> $GITHUB_ENV
+          echo "PROJ=$(dirname "$S")" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -42,6 +52,11 @@ jobs:
           else gradle assembleDebug --no-daemon; fi
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp "$(find . -name '*-debug.apk' | head -1)" "$GITHUB_WORKSPACE/out/kumanda.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kumanda-apk
+          path: out/kumanda.apk
 
       - uses: softprops/action-gh-release@v2
         with:

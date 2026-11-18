@@ -1,0 +1,50 @@
+name: Zip to APK
+on:
+  push:
+    paths: ['**.zip']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: En yeni zip'i bul ve ac
+        run: |
+          ZIP=$(git -c core.quotepath=false log --diff-filter=AM --name-only --pretty=format: -- '*.zip' | grep -m1 '\.zip$')
+          echo "Zip: $ZIP"
+          [ -n "$ZIP" ] || { echo "Zip bulunamadi"; exit 1; }
+          rm -rf work && mkdir work
+          unzip -q "$ZIP" -d work
+          S=$(find work -name settings.gradle.kts -o -name settings.gradle | head -1)
+          [ -n "$S" ] || { echo "Gradle projesi bulunamadi"; exit 1; }
+          echo "PROJ=$(dirname "$S")" >> $GITHUB_ENV
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: APK derle
+        run: |
+          cd "$PROJ"
+          if [ -f gradlew ]; then chmod +x gradlew; ./gradlew assembleDebug --no-daemon
+          else gradle assembleDebug --no-daemon; fi
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp "$(find . -name '*-debug.apk' | head -1)" "$GITHUB_WORKSPACE/out/kumanda.apk"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: APK build ${{ github.run_number }}
+          files: out/kumanda.apk

@@ -1,8 +1,10 @@
-
 name: Kumanda+ APK
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -11,14 +13,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: ZIP'i aç
+      - name: En güncel ZIP dosyasını bul ve aç
         run: |
-          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          ZIP_FILE="$(find . -type f -name '*.zip' \
+            ! -path './.git/*' \
+            -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "HATA: Depo ana klasöründe ZIP dosyası bulunamadı."
+            echo "HATA: ZIP dosyası bulunamadı."
             exit 1
           fi
-          unzip -q "$ZIP_FILE"
+
+          echo "Seçilen ZIP: $ZIP_FILE"
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
 
       - uses: actions/setup-java@v4
         with:
@@ -31,12 +39,28 @@ jobs:
           unzip -q gradle-8.11.1-bin.zip -d "$HOME"
           echo "$HOME/gradle-8.11.1/bin" >> "$GITHUB_PATH"
 
+      - name: Android projesini bul
+        id: project
+        run: |
+          SETTINGS=$(find extracted -type f \
+            \( -name settings.gradle -o -name settings.gradle.kts \) \
+            -print -quit)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "HATA: Gradle proje dosyası bulunamadı."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Android projesi: $PROJECT_DIR"
+
       - name: APK derle
-        working-directory: KumandaPlus
-        run: gradle assembleDebug
+        run: |
+          gradle -p "${{ steps.project.outputs.dir }}" assembleDebug
 
       - uses: actions/upload-artifact@v4
         with:
           name: KumandaPlus-debug-apk
-          path: KumandaPlus/app/build/outputs/apk/debug/*.apk
+          path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error

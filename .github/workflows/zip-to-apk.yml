@@ -1,47 +1,78 @@
+
 name: Kumanda+ Android APK
 
 on:
-  push:
-    branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      source_zip:
+        description: "Derlenecek ZIP dosyasinin yolu"
+        required: true
+        default: "source-zips/latest.zip"
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Secilen ZIP'ten APK olustur
     runs-on: ubuntu-latest
+
     steps:
       - name: Depoyu indir
         uses: actions/checkout@v4
-      - name: En güncel kaynak ZIP'ini aç (varsa)
+
+      - name: ZIP dosyasini ac ve Android projesini bul
+        id: project
         shell: bash
+        env:
+          SOURCE_ZIP: ${{ inputs.source_zip }}
         run: |
-          if [ -f source-zips/latest.zip ]; then
-            mkdir -p /tmp/kumanda-source
-            unzip -q source-zips/latest.zip -d /tmp/kumanda-source
-            PROJECT_DIR="$(dirname "$(find /tmp/kumanda-source -name settings.gradle.kts -print -quit)")"
-            if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-              echo "latest.zip içinde geçerli Android proje yapısı bulunamadı." >&2
-              exit 1
-            fi
-            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          else
-            echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          set -euo pipefail
+
+          if [ ! -f "$SOURCE_ZIP" ]; then
+            echo "HATA: ZIP dosyasi bulunamadi: $SOURCE_ZIP"
+            exit 1
           fi
+
+          mkdir -p "$RUNNER_TEMP/kumanda-source"
+          unzip -q -o "$SOURCE_ZIP" -d "$RUNNER_TEMP/kumanda-source"
+
+          SETTINGS_FILE="$(find "$RUNNER_TEMP/kumanda-source" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)"
+
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "HATA: ZIP icinde Gradle proje dosyasi bulunamadi."
+            exit 1
+          fi
+
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+
+          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ] && [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "HATA: Android app modulu bulunamadi."
+            exit 1
+          fi
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Java 17 kur
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-      - name: Gradle kur ve önbellekle
+          java-version: "17"
+
+      - name: Gradle 8.11.1 kur
         uses: gradle/actions/setup-gradle@v4
-      - name: En güncel projeden APK oluştur
-        run: gradle --no-daemon -p "$PROJECT_DIR" :app:assembleDebug
-      - name: APK dosyasını yükle
+        with:
+          gradle-version: "8.11.1"
+
+      - name: APK olustur
+        run: |
+          gradle --no-daemon -p "${{ steps.project.outputs.project_dir }}" :app:assembleDebug
+
+      - name: APK dosyasini yukle
         uses: actions/upload-artifact@v4
         with:
           name: KumandaPlus-debug-apk
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.project.outputs.project_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30

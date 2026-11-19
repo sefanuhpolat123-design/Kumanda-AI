@@ -3,8 +3,9 @@ name: Build APK from latest ZIP
 on:
   push:
     paths:
+      - '*.zip'
       - 'source-zips/**'
-      - '.github/workflows/build-apk.yml'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 concurrency:
@@ -18,25 +19,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
-
-      - name: Depo içeriği (teşhis)
-        run: |
-          echo "== kök =="; ls -la
-          echo "== source-zips =="; ls -la source-zips 2>&1 || true
 
       - name: En son yüklenen ZIP'i bul
         id: zip
         run: |
           set -e
+          echo "== depo kökü =="; ls -la
           BEST=""; BEST_T=0
           while IFS= read -r f; do
             T=$(git log -1 --format=%ct -- "$f" 2>/dev/null || true)
             T=${T:-0}
             if [ -z "$BEST" ] || [ "$T" -ge "$BEST_T" ]; then BEST="$f"; BEST_T="$T"; fi
-          done < <(find source-zips -maxdepth 2 -type f -iname '*.zip' 2>/dev/null | sort)
+          done < <(find . -maxdepth 2 -type f -iname '*.zip' -not -path './.git/*' | sed 's|^\./||' | sort -V)
           if [ -z "$BEST" ]; then
-            echo "::error::source-zips/ klasöründe .zip yok. Zip'i depoda source-zips/ klasörüne yükle."
+            echo "::error::Depoda .zip dosyası bulunamadı."
             exit 1
           fi
           echo "Derlenecek ZIP: $BEST"
@@ -50,7 +48,7 @@ jobs:
           unzip -q "${{ steps.zip.outputs.zip }}" -d "$RUNNER_TEMP/src"
           S=$(find "$RUNNER_TEMP/src" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/__MACOSX/*' | awk '{print length, $0}' | sort -n | head -n1 | cut -d' ' -f2-)
           if [ -z "$S" ]; then
-            echo "::error::ZIP içinde settings.gradle.kts bulunamadı. ZIP'in içeriği:"
+            echo "::error::ZIP içinde settings.gradle.kts bulunamadı. ZIP içeriği:"
             find "$RUNNER_TEMP/src" -maxdepth 3 | head -50
             exit 1
           fi

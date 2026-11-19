@@ -1,0 +1,42 @@
+
+name: Kumanda+ APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ZIP'i aç
+        run: |
+          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
+          if [ -z "$ZIP_FILE" ]; then
+            echo "HATA: Depo ana klasöründe ZIP dosyası bulunamadı."
+            exit 1
+          fi
+          unzip -q "$ZIP_FILE"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Gradle kur
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
+          unzip -q gradle-8.11.1-bin.zip -d "$HOME"
+          echo "$HOME/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+
+      - name: APK derle
+        working-directory: KumandaPlus
+        run: gradle assembleDebug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KumandaPlus-debug-apk
+          path: KumandaPlus/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

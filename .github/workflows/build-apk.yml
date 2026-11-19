@@ -1,0 +1,98 @@
+name: Build APK from latest ZIP
+
+on:
+  push:
+    paths:
+      - 'source-zips/**'
+      - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Depo içeriği (teşhis)
+        run: |
+          echo "== kök =="; ls -la
+          echo "== source-zips =="; ls -la source-zips 2>&1 || true
+
+      - name: En son yüklenen ZIP'i bul
+        id: zip
+        run: |
+          set -e
+          BEST=""; BEST_T=0
+          while IFS= read -r f; do
+            T=$(git log -1 --format=%ct -- "$f" 2>/dev/null || true)
+            T=${T:-0}
+            if [ -z "$BEST" ] || [ "$T" -ge "$BEST_T" ]; then BEST="$f"; BEST_T="$T"; fi
+          done < <(find source-zips -maxdepth 2 -type f -iname '*.zip' 2>/dev/null | sort)
+          if [ -z "$BEST" ]; then
+            echo "::error::source-zips/ klasöründe .zip yok. Zip'i depoda source-zips/ klasörüne yükle."
+            exit 1
+          fi
+          echo "Derlenecek ZIP: $BEST"
+          echo "zip=$BEST" >> "$GITHUB_OUTPUT"
+
+      - name: ZIP'i aç ve Android projesini bul
+        id: proj
+        run: |
+          set -e
+          rm -rf "$RUNNER_TEMP/src" && mkdir -p "$RUNNER_TEMP/src"
+          unzip -q "${{ steps.zip.outputs.zip }}" -d "$RUNNER_TEMP/src"
+          S=$(find "$RUNNER_TEMP/src" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -not -path '*/__MACOSX/*' | awk '{print length, $0}' | sort -n | head -n1 | cut -d' ' -f2-)
+          if [ -z "$S" ]; then
+            echo "::error::ZIP içinde settings.gradle.kts bulunamadı. ZIP'in içeriği:"
+            find "$RUNNER_TEMP/src" -maxdepth 3 | head -50
+            exit 1
+          fi
+          DIR=$(dirname "$S")
+          echo "Proje dizini: $DIR"; ls "$DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Vosk Türkçe modeli indir (projede yoksa)
+        run: |
+          set -e
+          D="${{ steps.proj.outputs.dir }}/app/src/main/assets"
+          if [ -d "$D/model" ]; then echo "Model zaten var"; exit 0; fi
+          mkdir -p "$D" "$RUNNER_TEMP/vm"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/vm/m.zip" https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip \
+            || curl -fL --retry 3 -o "$RUNNER_TEMP/vm/m.zip" https://huggingface.co/rhasspy/vosk-models/resolve/main/tr/vosk-model-small-tr-0.3.zip
+          unzip -q "$RUNNER_TEMP/vm/m.zip" -d "$RUNNER_TEMP/vm"
+          mv "$RUNNER_TEMP/vm/vosk-model-small-tr-0.3" "$D/model"
+          uuidgen > "$D/model/uuid"
+
+      - name: Debug APK derle
+        working-directory: ${{ steps.proj.outputs.dir }}
+        run: gradle assembleDebug --stacktrace
+
+      - name: APK adını ayarla
+        run: |
+          set -e
+          mkdir -p out
+          APK=$(find "${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug" -name '*.apk' | head -n1)
+          cp "$APK" out/KumandaPlus-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KumandaPlus-debug
+          path: out/KumandaPlus-debug.apk

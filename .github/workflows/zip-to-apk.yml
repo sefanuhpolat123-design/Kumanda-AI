@@ -1,65 +1,47 @@
-name: Zip to APK
+name: Kumanda+ Android APK
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ "main", "master" ]
+  workflow_dispatch:
 
-concurrency:
-  group: zip-apk-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: write
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: En guncel zip'i bul ve ac
+      - name: Depoyu indir
+        uses: actions/checkout@v4
+      - name: En güncel kaynak ZIP'ini aç (varsa)
+        shell: bash
         run: |
-          set -euo pipefail
-          ZIP=$(git -c core.quotepath=false log --diff-filter=AM --name-only --pretty=format: -- '*.zip' | grep -m1 '\.zip$' || true)
-          rm -rf work && mkdir work
-          if [ -n "$ZIP" ] && [ -f "$ZIP" ]; then
-            echo "Kullanilan zip: $ZIP"
-            unzip -q "$ZIP" -d work
+          if [ -f source-zips/latest.zip ]; then
+            mkdir -p /tmp/kumanda-source
+            unzip -q source-zips/latest.zip -d /tmp/kumanda-source
+            PROJECT_DIR="$(dirname "$(find /tmp/kumanda-source -name settings.gradle.kts -print -quit)")"
+            if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+              echo "latest.zip içinde geçerli Android proje yapısı bulunamadı." >&2
+              exit 1
+            fi
+            echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           else
-            echo "Zip yok, repo kokundeki proje kullaniliyor"
-            rsync -a --exclude work --exclude .git ./ work/
+            echo "PROJECT_DIR=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
           fi
-          S=$(find work -name 'settings.gradle*' | head -1)
-          [ -n "$S" ] || { echo "Gradle projesi bulunamadi"; exit 1; }
-          echo "PROJ=$(dirname "$S")" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-java@v4
+      - name: Java 17 kur
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Gradle kur ve önbellekle
+        uses: gradle/actions/setup-gradle@v4
+      - name: En güncel projeden APK oluştur
+        run: gradle --no-daemon -p "$PROJECT_DIR" :app:assembleDebug
+      - name: APK dosyasını yükle
+        uses: actions/upload-artifact@v4
         with:
-          gradle-version: 8.7
-
-      - name: APK derle
-        run: |
-          cd "$PROJ"
-          if [ -f gradlew ]; then chmod +x gradlew; ./gradlew assembleDebug --no-daemon
-          else gradle assembleDebug --no-daemon; fi
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          cp "$(find . -name '*-debug.apk' | head -1)" "$GITHUB_WORKSPACE/out/kumanda.apk"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: kumanda-apk
-          path: out/kumanda.apk
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: build-${{ github.run_number }}
-          name: APK build ${{ github.run_number }}
-          files: out/kumanda.apk
+          name: KumandaPlus-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
